@@ -202,6 +202,7 @@ namespace SampleProject1
                 progress.UpdateStatus("Reading Excel file...");
                 Application.DoEvents();
 
+                // 1. Read + merge
                 List<ProductMaster> products = ReadProductsFromExcel(_selectedExcelPath);
 
                 if (products.Count == 0)
@@ -214,8 +215,10 @@ namespace SampleProject1
                 progress.UpdateStatus("Converting to JSON...");
                 Application.DoEvents();
 
+                // 2. JSON
                 string json = JsonConvert.SerializeObject(products, Formatting.Indented);
 
+                // 3. Save
                 using (SaveFileDialog sfd = new SaveFileDialog())
                 {
                     sfd.Title = "Save JSON File";
@@ -247,17 +250,17 @@ namespace SampleProject1
         }
 
         // ===========================================================
-        // EXCEL → LIST<ProductMaster>
+        // EXCEL → LIST<ProductMaster>   (NOW WITH MERGE STEP)
         // ===========================================================
         private List<ProductMaster> ReadProductsFromExcel(string excelPath)
         {
-            var list = new List<ProductMaster>();
+            var rawList = new List<ProductMaster>();
 
             int headerRowsToSkip = 4;   // skip first 4 rows
             int footerRowsToSkip = 1;   // skip last row (change if needed)
 
             using (var stream = File.Open(excelPath, FileMode.Open, FileAccess.Read))
-            using (var reader = ExcelReaderFactory.CreateReader(stream))
+            using (var reader = ExcelDataReader.ExcelReaderFactory.CreateReader(stream))
             {
                 var dataSet = reader.AsDataSet(new ExcelDataSetConfiguration
                 {
@@ -268,7 +271,7 @@ namespace SampleProject1
                 });
 
                 if (dataSet.Tables.Count == 0)
-                    return list;
+                    return new List<ProductMaster>();
 
                 DataTable table = dataSet.Tables[0];
 
@@ -307,11 +310,117 @@ namespace SampleProject1
                         Generic = null
                     };
 
-                    list.Add(product);
+                    rawList.Add(product);
                 }
             }
 
-            return list;
+            // 🔁 MERGE DUPLICATES: same Code + Name + MfgCode
+            return MergeProducts(rawList);
+        }
+
+        // ===========================================================
+        // MERGE LOGIC
+        // ===========================================================
+        /// <summary>
+        /// Merge products that are "same" (Code+Name+MfgCode).
+        /// - Stock: sum of all stocks
+        /// - Expiry: take product with longest expiry
+        /// - Other fields: from longest-expiry product
+        /// - If multiple have same longest expiry: first one from Excel wins
+        /// </summary>
+        private List<ProductMaster> MergeProducts(List<ProductMaster> input)
+        {
+            var result = new List<ProductMaster>();
+
+            var groups = input.GroupBy(p => new
+            {
+                Code = NormalizeKey(p.Code),
+                Name = NormalizeKey(p.Name),
+                MfgCode = NormalizeKey(p.MfgCode)
+            });
+
+            foreach (var g in groups)
+            {
+                // If only one product in group – no merge needed
+                if (g.Count() == 1)
+                {
+                    result.Add(g.First());
+                    continue;
+                }
+
+                // 1) Find "best" product = max expiry, breaking ties by order
+                ProductMaster best = g.First();                   // start with first row
+                DateTime bestExpDate = ParseExpiry(best.ExpDate); // MinValue if null/invalid
+
+                foreach (var p in g.Skip(1))
+                {
+                    DateTime exp = ParseExpiry(p.ExpDate);
+
+                    // strictly greater → take this as best
+                    if (exp > bestExpDate)
+                    {
+                        best = p;
+                        bestExpDate = exp;
+                    }
+                    // if equal, keep existing 'best' to follow "first product wins"
+                }
+
+                // 2) Sum stock across all products
+                decimal totalStock = 0m;
+                bool anyStock = false;
+
+                foreach (var p in g)
+                {
+                    if (p.Stock.HasValue)
+                    {
+                        totalStock += p.Stock.Value;
+                        anyStock = true;
+                    }
+                }
+
+                // Clone best so we don't modify original collection accidentally
+                var merged = new ProductMaster
+                {
+                    Code = best.Code,
+                    Name = best.Name,
+                    ShortName = best.ShortName,
+                    MfgCompany = best.MfgCompany,
+                    MfgCode = best.MfgCode,
+                    GST = best.GST,
+                    MRP = best.MRP,
+                    SalesRate = best.SalesRate,
+                    PurchaseRate = best.PurchaseRate,
+                    Packing = best.Packing,
+                    IsHide = best.IsHide,
+                    Stock = anyStock ? (decimal?)totalStock : null,
+                    Discount = best.Discount,
+                    Scheme = best.Scheme,
+                    ExpDate = best.ExpDate,
+                    Generic = best.Generic
+                };
+
+                result.Add(merged);
+            }
+
+            return result;
+        }
+
+        private string NormalizeKey(string value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value.Trim().ToUpperInvariant();
+        }
+
+        private DateTime ParseExpiry(string expDate)
+        {
+            if (string.IsNullOrWhiteSpace(expDate))
+                return DateTime.MinValue;
+
+            if (DateTime.TryParse(expDate, out var dt))
+                return dt;
+
+            return DateTime.MinValue;
         }
 
         // ===========================================================
