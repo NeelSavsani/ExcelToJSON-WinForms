@@ -6,6 +6,9 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using System.Drawing;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
 using ExcelDataReader;          // Excel reader
 using Newtonsoft.Json;          // JSON
 
@@ -14,6 +17,7 @@ namespace SampleProject1
     public partial class Form1 : Form
     {
         private string _selectedExcelPath;
+        private string _selectedJsonPath;
 
         // extra UI elements created in code
         private Panel pnlCard;
@@ -21,10 +25,20 @@ namespace SampleProject1
         private Label lblSubtitle;
         private Label lblHint;
 
+        // JSON picker controls
+        private Label lblJsonPath;
+        private Button btnBrowseJson;
+        private Button btnCallApi;
+
+        // API URL + header
+        private const string ApiUrl = "https://orderapp.neosoftservice.in/api/Sync/SyncProduct";
+        private const string NeoSoftCodeHeaderName = "NeoSoftCode";
+        private const string NeoSoftCodeHeaderValue = "b4a482ca-6660-4cb9-96af-f1adb0b69dd1";
+
         public Form1()
         {
             InitializeComponent();
-            SetupModernUi();      // build modern layout in code
+            SetupModernUi();
         }
 
         // ===========================================================
@@ -33,7 +47,7 @@ namespace SampleProject1
         private void SetupModernUi()
         {
             // ----- Form look -----
-            this.Text = "Excel to JSON Converter";
+            this.Text = "Excel → JSON Converter & API Uploader";
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.Gainsboro;
             this.Font = new Font("Segoe UI", 10F);
@@ -43,7 +57,7 @@ namespace SampleProject1
             // ----- Main card panel -----
             pnlCard = new Panel();
             pnlCard.BackColor = Color.White;
-            pnlCard.Size = new Size(700, 260);
+            pnlCard.Size = new Size(700, 340);
             pnlCard.BorderStyle = BorderStyle.FixedSingle;
             CenterCardPanel();
             this.Controls.Add(pnlCard);
@@ -53,7 +67,7 @@ namespace SampleProject1
 
             // ----- Title -----
             lblTitle = new Label();
-            lblTitle.Text = "Excel → JSON Converter";
+            lblTitle.Text = "Excel → JSON Converter & API Uploader";
             lblTitle.Font = new Font("Segoe UI", 14F, FontStyle.Bold);
             lblTitle.Dock = DockStyle.Top;
             lblTitle.Height = 40;
@@ -62,7 +76,7 @@ namespace SampleProject1
 
             // ----- Subtitle -----
             lblSubtitle = new Label();
-            lblSubtitle.Text = "Select an Excel file and convert it into JSON product master data.";
+            lblSubtitle.Text = "Convert Excel to JSON (merged) and send products to API in batches of 1000.";
             lblSubtitle.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
             lblSubtitle.Dock = DockStyle.Top;
             lblSubtitle.Height = 30;
@@ -70,25 +84,23 @@ namespace SampleProject1
             lblSubtitle.ForeColor = Color.DimGray;
             pnlCard.Controls.Add(lblSubtitle);
 
-            // Base Y coord for controls under subtitle
-            int baseY = 90;
+            int baseY = 80;
 
-            // ----- File path label (acts like read-only textbox) -----
+            // ================== EXCEL PICKER ==================
             lblFilePath.AutoSize = false;
             lblFilePath.BorderStyle = BorderStyle.FixedSingle;
             lblFilePath.BackColor = Color.White;
             lblFilePath.TextAlign = ContentAlignment.MiddleLeft;
             lblFilePath.Text = "No file selected";
-            lblFilePath.Width = 480;
-            lblFilePath.Height = 30;
+            lblFilePath.Width = 420;
+            lblFilePath.Height = 28;
             lblFilePath.Location = new Point(60, baseY);
             lblFilePath.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             pnlCard.Controls.Add(lblFilePath); // move into panel
 
-            // ----- Browse button -----
-            button1.Text = "Browse";
-            button1.Width = 110;
-            button1.Height = 30;
+            button1.Text = "Browse Excel";
+            button1.Width = 130;
+            button1.Height = 28;
             button1.Location = new Point(lblFilePath.Right + 15, baseY);
             button1.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
@@ -96,23 +108,21 @@ namespace SampleProject1
             button1.FlatAppearance.BorderSize = 0;
             button1.BackColor = Color.DodgerBlue;
             button1.ForeColor = Color.White;
-            button1.Font = new Font("Segoe UI", 9F, FontStyle.Bold); // smaller font
+            button1.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
 
             pnlCard.Controls.Add(button1); // move into panel
 
-            // ----- Hint text -----
             lblHint = new Label();
             lblHint.AutoSize = true;
-            lblHint.Text = "Supported formats: .xlsx, .xls";
+            lblHint.Text = "Select Excel (.xlsx, .xls) to convert → merged JSON (scheme logic, longest expiry, etc.)";
             lblHint.Font = new Font("Segoe UI", 8.5F);
             lblHint.ForeColor = Color.Gray;
-            lblHint.Location = new Point(lblFilePath.Left + 4, baseY + 38);
+            lblHint.Location = new Point(lblFilePath.Left + 4, baseY + 32);
             pnlCard.Controls.Add(lblHint);
 
-            // ----- Convert button -----
-            ConvertBtn.Text = "Convert to JSON";
-            ConvertBtn.Width = 200;
-            ConvertBtn.Height = 40;
+            ConvertBtn.Text = "Convert Excel to JSON";
+            ConvertBtn.Width = 220;
+            ConvertBtn.Height = 34;
             ConvertBtn.FlatStyle = FlatStyle.Flat;
             ConvertBtn.FlatAppearance.BorderSize = 0;
             ConvertBtn.BackColor = Color.MediumSeaGreen;
@@ -120,10 +130,59 @@ namespace SampleProject1
             ConvertBtn.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
 
             int convertX = (pnlCard.Width - ConvertBtn.Width) / 2;
-            int convertY = baseY + 80;
+            int convertY = baseY + 65;
             ConvertBtn.Location = new Point(convertX, convertY);
             ConvertBtn.Anchor = AnchorStyles.Top;
-            pnlCard.Controls.Add(ConvertBtn); // move into panel
+            pnlCard.Controls.Add(ConvertBtn);
+
+            // ================== JSON PICKER & API CALL ==================
+            int jsonBaseY = convertY + 55;
+
+            lblJsonPath = new Label();
+            lblJsonPath.AutoSize = false;
+            lblJsonPath.BorderStyle = BorderStyle.FixedSingle;
+            lblJsonPath.BackColor = Color.White;
+            lblJsonPath.TextAlign = ContentAlignment.MiddleLeft;
+            lblJsonPath.Text = "No file selected";
+            lblJsonPath.Width = 420;
+            lblJsonPath.Height = 28;
+            lblJsonPath.Location = new Point(60, jsonBaseY);
+            lblJsonPath.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            pnlCard.Controls.Add(lblJsonPath);
+
+            btnBrowseJson = new Button();
+            btnBrowseJson.Text = "Browse JSON";
+            btnBrowseJson.Width = 130;
+            btnBrowseJson.Height = 28;
+            btnBrowseJson.Location = new Point(lblJsonPath.Right + 15, jsonBaseY);
+            btnBrowseJson.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            btnBrowseJson.FlatStyle = FlatStyle.Flat;
+            btnBrowseJson.FlatAppearance.BorderSize = 0;
+            btnBrowseJson.BackColor = Color.SteelBlue;
+            btnBrowseJson.ForeColor = Color.White;
+            btnBrowseJson.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+
+            btnBrowseJson.Click += BtnBrowseJson_Click;
+            pnlCard.Controls.Add(btnBrowseJson);
+
+            btnCallApi = new Button();
+            btnCallApi.Text = "Call API (Upload JSON)";
+            btnCallApi.Width = 220;
+            btnCallApi.Height = 34;
+            btnCallApi.FlatStyle = FlatStyle.Flat;
+            btnCallApi.FlatAppearance.BorderSize = 0;
+            btnCallApi.BackColor = Color.DarkOrange;
+            btnCallApi.ForeColor = Color.White;
+            btnCallApi.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+
+            int apiX = (pnlCard.Width - btnCallApi.Width) / 2;
+            int apiY = jsonBaseY + 40;
+            btnCallApi.Location = new Point(apiX, apiY);
+            btnCallApi.Anchor = AnchorStyles.Top;
+            btnCallApi.Click += BtnCallApi_Click;
+
+            pnlCard.Controls.Add(btnCallApi);
         }
 
         private void CenterCardPanel()
@@ -149,7 +208,7 @@ namespace SampleProject1
         }
 
         // ===========================================================
-        // SELECT FILE BUTTON
+        // SELECT EXCEL BUTTON
         // ===========================================================
         private void button1_Click(object sender, EventArgs e)
         {
@@ -183,7 +242,41 @@ namespace SampleProject1
         }
 
         // ===========================================================
-        // CONVERT BUTTON
+        // SELECT JSON BUTTON
+        // ===========================================================
+        private void BtnBrowseJson_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog ofd = new OpenFileDialog())
+            {
+                ofd.Title = "Select JSON File";
+                ofd.Filter = "JSON Files (*.json)|*.json";
+
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    string ext = Path.GetExtension(ofd.FileName).ToLower();
+                    if (ext != ".json")
+                    {
+                        MessageBox.Show("Only .json files are allowed.",
+                            "Invalid file", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+                        _selectedJsonPath = null;
+                        lblJsonPath.Text = "No file selected";
+                        return;
+                    }
+
+                    _selectedJsonPath = ofd.FileName;
+                    lblJsonPath.Text = _selectedJsonPath;
+                }
+                else
+                {
+                    _selectedJsonPath = null;
+                    lblJsonPath.Text = "No file selected";
+                }
+            }
+        }
+
+        // ===========================================================
+        // CONVERT EXCEL → JSON BUTTON
         // ===========================================================
         private void ConvertBtn_Click(object sender, EventArgs e)
         {
@@ -202,7 +295,7 @@ namespace SampleProject1
                 progress.UpdateStatus("Reading Excel file...");
                 Application.DoEvents();
 
-                // 1. Read + merge
+                // 1. Read + MERGE
                 List<ProductMaster> products = ReadProductsFromExcel(_selectedExcelPath);
 
                 if (products.Count == 0)
@@ -215,10 +308,8 @@ namespace SampleProject1
                 progress.UpdateStatus("Converting to JSON...");
                 Application.DoEvents();
 
-                // 2. JSON
                 string json = JsonConvert.SerializeObject(products, Formatting.Indented);
 
-                // 3. Save
                 using (SaveFileDialog sfd = new SaveFileDialog())
                 {
                     sfd.Title = "Save JSON File";
@@ -250,14 +341,65 @@ namespace SampleProject1
         }
 
         // ===========================================================
-        // EXCEL → LIST<ProductMaster>   (NOW WITH MERGE STEP)
+        // CALL API BUTTON (UPLOAD JSON IN 1000-CHUNKS)
+        // ===========================================================
+        private async void BtnCallApi_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_selectedJsonPath) || !File.Exists(_selectedJsonPath))
+            {
+                MessageBox.Show("Please select a JSON file first.",
+                    "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            ProgressForm progress = new ProgressForm();
+
+            try
+            {
+                progress.Show();
+                progress.UpdateStatus("Reading JSON file...");
+                Application.DoEvents();
+
+                string jsonText = File.ReadAllText(_selectedJsonPath, Encoding.UTF8);
+
+                var products = JsonConvert.DeserializeObject<List<ProductMaster>>(jsonText);
+
+                if (products == null || products.Count == 0)
+                {
+                    MessageBox.Show("JSON file does not contain any products.",
+                        "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                progress.UpdateStatus("Uploading to API in batches of 1000...");
+                Application.DoEvents();
+
+                await SendProductsToApiAsync(products, progress);
+
+                MessageBox.Show("All batches uploaded successfully!",
+                    "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error during API upload:\n" + ex.Message,
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!progress.IsDisposed)
+                    progress.Close();
+            }
+        }
+
+        // ===========================================================
+        // EXCEL → LIST<ProductMaster>   (WITH MERGE STEP)
         // ===========================================================
         private List<ProductMaster> ReadProductsFromExcel(string excelPath)
         {
             var rawList = new List<ProductMaster>();
 
             int headerRowsToSkip = 4;   // skip first 4 rows
-            int footerRowsToSkip = 1;   // skip last row (change if needed)
+            int footerRowsToSkip = 3;   // skip last 3 rows (footer)
 
             using (var stream = File.Open(excelPath, FileMode.Open, FileAccess.Read))
             using (var reader = ExcelDataReader.ExcelReaderFactory.CreateReader(stream))
@@ -289,24 +431,24 @@ namespace SampleProject1
 
                     var product = new ProductMaster
                     {
-                        Code = GetString(row, 0),
-                        Name = GetString(row, 1),
-                        ShortName = GetString(row, 1),
+                        Code = GetString(row, 0),              // A
+                        Name = GetString(row, 1),              // B
+                        ShortName = GetString(row, 1),         // same as Name
                         MfgCompany = null,
-                        MfgCode = CleanMfg(GetString(row, 17)),
+                        MfgCode = CleanMfg(GetString(row, 17)),// R
                         GST = null,
-                        MRP = GetDecimal(row, 10),
-                        SalesRate = GetDecimal(row, 12),
-                        PurchaseRate = GetDecimal(row, 11),
+                        MRP = GetDecimal(row, 10),             // K
+                        SalesRate = GetDecimal(row, 12),       // M
+                        PurchaseRate = GetDecimal(row, 11),    // L
                         Packing = null,
                         IsHide = null,
-                        Stock = GetDecimal(row, 3),
+                        Stock = GetDecimal(row, 3),            // D
                         Discount = null,
 
-                        // Scheme built from E + F (4+5)
+                        // Scheme from E + F
                         Scheme = BuildScheme(row),
 
-                        ExpDate = FormatDate(GetDate(row, 18)),
+                        ExpDate = FormatDate(GetDate(row, 18)),// S
                         Generic = null
                     };
 
@@ -314,20 +456,13 @@ namespace SampleProject1
                 }
             }
 
-            // 🔁 MERGE DUPLICATES: same Code + Name + MfgCode
+            // Merge duplicates (Code + Name + MfgCode)
             return MergeProducts(rawList);
         }
 
         // ===========================================================
         // MERGE LOGIC
         // ===========================================================
-        /// <summary>
-        /// Merge products that are "same" (Code+Name+MfgCode).
-        /// - Stock: sum of all stocks
-        /// - Expiry: take product with longest expiry
-        /// - Other fields: from longest-expiry product
-        /// - If multiple have same longest expiry: first one from Excel wins
-        /// </summary>
         private List<ProductMaster> MergeProducts(List<ProductMaster> input)
         {
             var result = new List<ProductMaster>();
@@ -341,34 +476,29 @@ namespace SampleProject1
 
             foreach (var g in groups)
             {
-                // If only one product in group – no merge needed
                 if (g.Count() == 1)
                 {
                     result.Add(g.First());
                     continue;
                 }
 
-                // 1) Find "best" product = max expiry, breaking ties by order
-                ProductMaster best = g.First();                   // start with first row
-                DateTime bestExpDate = ParseExpiry(best.ExpDate); // MinValue if null/invalid
+                // pick product with longest expiry; if tie, first one wins
+                ProductMaster best = g.First();
+                DateTime bestExp = ParseExpiry(best.ExpDate);
 
                 foreach (var p in g.Skip(1))
                 {
                     DateTime exp = ParseExpiry(p.ExpDate);
-
-                    // strictly greater → take this as best
-                    if (exp > bestExpDate)
+                    if (exp > bestExp)
                     {
                         best = p;
-                        bestExpDate = exp;
+                        bestExp = exp;
                     }
-                    // if equal, keep existing 'best' to follow "first product wins"
                 }
 
-                // 2) Sum stock across all products
+                // sum stock
                 decimal totalStock = 0m;
                 bool anyStock = false;
-
                 foreach (var p in g)
                 {
                     if (p.Stock.HasValue)
@@ -378,7 +508,6 @@ namespace SampleProject1
                     }
                 }
 
-                // Clone best so we don't modify original collection accidentally
                 var merged = new ProductMaster
                 {
                     Code = best.Code,
@@ -421,6 +550,54 @@ namespace SampleProject1
                 return dt;
 
             return DateTime.MinValue;
+        }
+
+        // ===========================================================
+        // API UPLOAD (BATCHES OF 1000)
+        // ===========================================================
+        private async Task SendProductsToApiAsync(
+            List<ProductMaster> products,
+            ProgressForm progress)
+        {
+            const int batchSize = 1000;
+            int total = products.Count;
+            int totalBatches = (int)Math.Ceiling(total / (double)batchSize);
+
+            using (var client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.Clear();
+                client.DefaultRequestHeaders.Accept.Add(
+                    new MediaTypeWithQualityHeaderValue("application/json"));
+
+                client.DefaultRequestHeaders.Add(NeoSoftCodeHeaderName, NeoSoftCodeHeaderValue);
+
+                for (int i = 0; i < total; i += batchSize)
+                {
+                    int batchNumber = (i / batchSize) + 1;
+                    var batch = products
+                        .Skip(i)
+                        .Take(batchSize)
+                        .ToList();
+
+                    progress.UpdateStatus(
+                        $"Sending batch {batchNumber} of {totalBatches} ({batch.Count} items)...");
+                    Application.DoEvents();
+
+                    string bodyJson = JsonConvert.SerializeObject(batch);
+                    using (var content = new StringContent(bodyJson, Encoding.UTF8, "application/json"))
+                    {
+                        HttpResponseMessage response = await client.PostAsync(ApiUrl, content);
+
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            string respText = await response.Content.ReadAsStringAsync();
+                            throw new Exception(
+                                $"API error on batch {batchNumber}/{totalBatches}: " +
+                                $"{(int)response.StatusCode} {response.ReasonPhrase}\r\n{respText}");
+                        }
+                    }
+                }
+            }
         }
 
         // ===========================================================
